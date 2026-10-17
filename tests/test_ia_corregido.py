@@ -3,10 +3,13 @@ pone en rojo cuando se le introduce una mutación (ver DICTAMEN_IA.md).
 
 Lo que cambia respecto a la propuesta de la IA:
   1. Cada aserción fija el resultado esperado (201, 404, 422...), no un conjunto de resultados aceptables.
-  2. Se verifica el EFECTO (lo guardado, lo listado, lo registrado), no solo que la ruta responda.
+  2. Se verifica el EFECTO (lo guardado, lo listado, lo registrado), siempre leyéndolo en una petición
+     NUEVA: cada petición usa su propia sesión, así que lo que no se confirmó con `commit` no se ve.
   3. Los datos son deterministas (parametrizados), sin `random` ni `uuid` sin semilla.
   4. El aislamiento es real: la sesión se sustituye con `app.dependency_overrides[database.get_db]`
      (fixture `cliente` de conftest.py), sobre una base temporal con el esquema de Alembic.
+  5. Cubre los nueve endpoints del contrato más /health: los 404, los 409, los 422, los commits y los
+     validadores de cada ruta, para que una mutación en cualquiera de ellas deje alguna prueba en rojo.
 
     pytest tests/test_ia_corregido.py -v
 """
@@ -29,6 +32,9 @@ def _crear(cliente, **extra):
     return r.json()
 
 
+# --- Creación y lectura ----------------------------------------------------
+
+
 def test_crear_poliza_devuelve_201_y_queda_guardada(cliente):
     creada = _crear(cliente)
     leida = cliente.get(f"/polizas/{creada['id']}")
@@ -44,16 +50,16 @@ def test_primas_validas_son_aceptadas_con_201(cliente, prima):
     assert r.json()["prima"] == prima
 
 
-@pytest.mark.parametrize("prima", [0, -1, -1_000_000])
-def test_primas_no_positivas_dan_422_y_no_guardan_nada(cliente, prima):
-    assert cliente.post("/polizas", json={**BASE, "prima": prima}).status_code == 422
-    assert cliente.get("/polizas").json() == []
+def test_el_asegurado_se_normaliza_y_no_queda_vacio(cliente):
+    creada = _crear(cliente, asegurado="  ana   rueda ")
+    assert creada["asegurado"] == "Ana Rueda"
+    assert cliente.get(f"/polizas/{creada['id']}").json()["asegurado"] == "Ana Rueda"
 
 
-def test_consultar_poliza_inexistente_da_404(cliente):
-    r = cliente.get("/polizas/999999")
-    assert r.status_code == 404
-    assert "error" not in r.json() and "999999" in r.json()["detail"]
+def test_ninguna_respuesta_expone_el_token_de_firma(cliente):
+    creada = _crear(cliente)
+    respuestas = [creada, cliente.get(f"/polizas/{creada['id']}").json(), cliente.get("/polizas").json()]
+    assert all("token_firma" not in str(cuerpo) for cuerpo in respuestas)
 
 
 def test_listar_polizas_devuelve_exactamente_las_creadas(cliente):
@@ -67,6 +73,107 @@ def test_numero_duplicado_da_409_y_no_duplica(cliente):
     assert len(cliente.get("/polizas").json()) == 1
 
 
+# --- Validación: la entrada inválida da 422 y no guarda nada ---------------
+
+
+@pytest.mark.parametrize("prima", [0, -1, -1_000_000])
+def test_primas_no_positivas_dan_422_y_no_guardan_nada(cliente, prima):
+    assert cliente.post("/polizas", json={**BASE, "prima": prima}).status_code == 422
+    assert cliente.get("/polizas").json() == []
+
+
+@pytest.mark.parametrize("inicio, fin", [("2027-01-14", "2026-01-15"), ("2026-06-01", "2026-06-01")])
+def test_fechas_invertidas_o_iguales_dan_422(cliente, inicio, fin):
+    r = cliente.post("/polizas", json={**BASE, "fecha_inicio": inicio, "fecha_fin": fin})
+    assert r.status_code == 422
+    assert cliente.get("/polizas").json() == []
+
+
+@pytest.mark.parametrize("siniestro", [
+    {**SINIESTRO, "monto": -50},
+    {**SINIESTRO, "monto": 0},
+    {**SINIESTRO, "descripcion": "x"},
+])
+def test_siniestro_anidado_invalido_da_422_y_no_guarda_la_poliza(cliente, siniestro):
+    assert cliente.post("/polizas", json={**BASE, "siniestros": [siniestro]}).status_code == 422
+    assert cliente.get("/polizas").json() == []
+
+
+def test_falta_un_campo_obligatorio_da_422(cliente):
+    sin_numero = {k: v for k, v in BASE.items() if k != "numero"}
+    assert cliente.post("/polizas", json=sin_numero).status_code == 422
+
+
+# --- No existe: 404 en todas las rutas con identificador -------------------
+
+
+def test_consultar_poliza_inexistente_da_404(cliente):
+    r = cliente.get("/polizas/999999")
+    assert r.status_code == 404
+    assert "error" not in r.json() and "999999" in r.json()["detail"]
+
+
+def test_actualizar_poliza_inexistente_da_404(cliente):
+    assert cliente.put("/polizas/999999", json={"prima": 10}).status_code == 404
+
+
+def test_declarar_siniestro_en_poliza_inexistente_da_404_y_no_deja_huerfanos(cliente):
+    assert cliente.post("/polizas/999999/siniestros", json=SINIESTRO).status_code == 404
+    assert cliente.get("/siniestros").json() == []
+
+
+def test_score_de_poliza_inexistente_da_404_y_no_registra(cliente):
+    assert cliente.post("/score", json={"numero": "POL-NO-EXISTE"}).status_code == 404
+    assert cliente.get("/predicciones").json() == []
+
+
+# --- Actualización parcial (PUT) -------------------------------------------
+
+
+def test_put_parcial_cambia_solo_lo_enviado_y_queda_guardado(cliente):
+    creada = _crear(cliente, asegurado="Bruno Celis", tipo="hogar")
+    r = cliente.put(f"/polizas/{creada['id']}", json={"prima": 999_000})
+    assert r.status_code == 200 and r.json()["prima"] == 999_000
+    leida = cliente.get(f"/polizas/{creada['id']}").json()  # petición nueva: solo se ve lo confirmado
+    assert (leida["prima"], leida["asegurado"], leida["tipo"], leida["fecha_fin"]) == (
+        999_000, "Bruno Celis", "hogar", "2026-12-31")
+
+
+def test_put_invalido_da_422_y_no_cambia_nada(cliente):
+    creada = _crear(cliente)
+    assert cliente.put(f"/polizas/{creada['id']}", json={"prima": 0}).status_code == 422
+    assert cliente.put(f"/polizas/{creada['id']}", json={"fecha_fin": "2025-01-01"}).status_code == 422
+    assert cliente.get(f"/polizas/{creada['id']}").json() == creada
+
+
+# --- Siniestros ------------------------------------------------------------
+
+
+def test_siniestro_se_declara_con_201_y_queda_guardado(cliente):
+    creada = _crear(cliente)
+    r = cliente.post(f"/polizas/{creada['id']}/siniestros", json=SINIESTRO)
+    assert r.status_code == 201
+    assert r.json()["poliza_id"] == creada["id"] and r.json()["monto"] == SINIESTRO["monto"]
+    guardados = cliente.get(f"/polizas/{creada['id']}").json()["siniestros"]
+    assert [s["id"] for s in guardados] == [r.json()["id"]]
+
+
+def test_siniestro_invalido_da_422_y_no_guarda_nada(cliente):
+    creada = _crear(cliente)
+    assert cliente.post(f"/polizas/{creada['id']}/siniestros", json={**SINIESTRO, "monto": -1}).status_code == 422
+    assert cliente.get(f"/polizas/{creada['id']}").json()["siniestros"] == []
+
+
+def test_listar_siniestros_trae_el_numero_de_su_poliza(cliente):
+    _crear(cliente, siniestros=[SINIESTRO, {**SINIESTRO, "monto": 100_000}])
+    siniestros = cliente.get("/siniestros").json()
+    assert [s["numero_poliza"] for s in siniestros] == [BASE["numero"]] * 2
+    assert sorted(s["monto"] for s in siniestros) == [100_000, 850_000]
+
+
+# --- Resumen ---------------------------------------------------------------
+
+
 def test_resumen_tiene_los_numeros_exactos(cliente):
     _crear(cliente, siniestros=[SINIESTRO, {**SINIESTRO, "monto": 150_000}])
     _crear(cliente, numero="POL-IA-000002")
@@ -76,8 +183,13 @@ def test_resumen_tiene_los_numeros_exactos(cliente):
     ]
 
 
+# --- Puntuación e histórico de predicciones --------------------------------
+
+
 @pytest.mark.parametrize("prima", [500_000, 4_800_000])
 def test_score_de_poliza_recien_creada_registra_la_prediccion(cliente, prima):
+    from config import get_settings
+
     _crear(cliente, prima=prima, siniestros=[SINIESTRO])
     r = cliente.post("/score", json={"numero": BASE["numero"]})
     assert r.status_code == 200
@@ -89,11 +201,25 @@ def test_score_de_poliza_recien_creada_registra_la_prediccion(cliente, prima):
     assert len(registradas) == 1
     assert registradas[0]["numero"] == BASE["numero"]
     assert registradas[0]["puntaje"] == pytest.approx(cuerpo["puntaje"], abs=1e-4)
+    # alto_riesgo es exactamente «puntaje por encima del umbral configurado»
+    esperado = registradas[0]["puntaje"] > get_settings().umbral_alto_riesgo
+    assert cuerpo["alto_riesgo"] is esperado and registradas[0]["alto_riesgo"] is esperado
 
 
-def test_score_de_poliza_inexistente_da_404_y_no_registra(cliente):
-    assert cliente.post("/score", json={"numero": "POL-NO-EXISTE"}).status_code == 404
-    assert cliente.get("/predicciones").json() == []
+def test_cada_score_agrega_una_prediccion(cliente):
+    _crear(cliente)
+    for _ in range(2):
+        assert cliente.post("/score", json={"numero": BASE["numero"]}).status_code == 200
+    assert len(cliente.get("/predicciones").json()) == 2
+
+
+# --- Salud y aislamiento ---------------------------------------------------
+
+
+def test_health_responde_200_y_dice_que_la_base_responde(cliente):
+    r = cliente.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "database": "ok"}
 
 
 def test_el_aislamiento_es_real_la_sesion_sustituida_es_database_get_db(cliente):
