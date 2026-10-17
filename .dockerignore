@@ -1,0 +1,31 @@
+# Control de versiones y entornos locales
+.git
+.gitignore
+.venv
+venv
+env
+__pycache__
+*.py[cod]
+.pytest_cache
+
+# Secretos y datos: nunca entran en la imagen
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.sqlite3
+
+# Lo que no hace falta para ejecutar el servicio
+tests
+plantillas
+*.md
+*.csv
+Dockerfile
+.dockerignore
+ia_tests_propuesta.py
+contar_consultas.py
+sembrar_datos.py
+verificar_entrega.py
+.vscode
+.idea
