@@ -13,7 +13,9 @@
 nunca sobre el árbol de trabajo: el servicio del repositorio quedó como estaba (`git status` limpio). La
 propuesta de la IA se ejecutó con `DATABASE_URL=sqlite:///./real.db`, una base ya migrada con
 `alembic upgrade head`, porque es la que usaría la aplicación. En las salidas solo se acortaron las rutas
-absolutas. Sobre el servicio sano, la propuesta da `6 passed` y la corregida `35 passed`.
+absolutas. Sobre el servicio sano, la propuesta da `6 passed` y la corregida `35 passed`. Los tres
+experimentos los reprodujo además Edwing a mano, en una copia nueva del repositorio, y obtuvo el mismo
+comportamiento (ver `BITACORA_IA.md`, prompt 12).
 
 **Cuánto detecta la batería corregida.** Además de las tres mutaciones de abajo, se midió con 21 mutantes en
 todas las rutas (cada 404, cada `commit`, cada validador, los códigos 201, la fuga de `token_firma`,

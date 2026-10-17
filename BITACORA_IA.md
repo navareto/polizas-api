@@ -18,6 +18,7 @@
 | 9 | Entrega | Edwing | Crear el repositorio vacío en GitHub con ayuda paso a paso (capturas de pantalla), autorizar subir la rama `entrega` como `main` con la etiqueta `v0-semilla`, y dejar `navareto@gmail.com` en `EQUIPO.md`. |
 | 10 | Entrega | Edwing | Preguntar cómo darle seguridad al repositorio sin que el profesor deje de verlo; se decidió dejarlo público hasta que el profesor confirme cómo lo lee el calificador. |
 | 11 | Revisión | Edwing | Pedir una revisión completa contra la rúbrica con estado y mejoras; la IA midió 21 mutantes sobre la batería corregida y la amplió (ver «Rechazado» 12). |
+| 12 | Parte D | Edwing | Reproducir con sus propias manos los tres experimentos de la Parte D en una copia nueva del repositorio (carpeta `practica`). La preparación (clonado, base de datos y primera corrida sobre el servicio sano) la ejecutó la IA en el terminal a petición suya. Edwing hizo cada mutación a mano en el Bloc de notas, corrió las dos baterías y deshizo el cambio, y la IA comprobó en su terminal y en el archivo que se hubiera hecho. Resultados que obtuvo él: experimento 1 (el 404 pasa a 200), propuesta `6 passed` y corregida `4 failed, 31 passed`; experimento 2 (`/score` no guarda), propuesta `6 passed` y corregida `3 failed, 32 passed`; experimento 3 (primas de más de 4 000 000), la propuesta falló en 3 de 15 corridas idénticas y la corregida dio `4 failed, 31 passed` las dos veces. El experimento 1 se repitió una vez porque la primera vez no se corrieron las pruebas con el defecto puesto. |
 
 ## Aceptado
 
