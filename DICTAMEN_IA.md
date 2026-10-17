@@ -13,7 +13,14 @@
 nunca sobre el árbol de trabajo: el servicio del repositorio quedó como estaba (`git status` limpio). La
 propuesta de la IA se ejecutó con `DATABASE_URL=sqlite:///./real.db`, una base ya migrada con
 `alembic upgrade head`, porque es la que usaría la aplicación. En las salidas solo se acortaron las rutas
-absolutas. Sobre el servicio sano, la propuesta da `6 passed` y la corregida `18 passed`.
+absolutas. Sobre el servicio sano, la propuesta da `6 passed` y la corregida `35 passed`.
+
+**Cuánto detecta la batería corregida.** Además de las tres mutaciones de abajo, se midió con 21 mutantes en
+todas las rutas (cada 404, cada `commit`, cada validador, los códigos 201, la fuga de `token_firma`,
+`alto_riesgo`, `/health`...). La primera versión de `tests/test_ia_corregido.py`, ejecutada sola, detectaba solo
+9 de los 21; se amplió a los nueve endpoints y ahora detecta **20 de 21**. El que sobrevive es un mutante
+equivalente (añadir un valor por defecto a `numero` en un esquema de salida que ya lo lee del modelo: no cambia
+ningún comportamiento observable).
 
 ## Defecto 1
 
@@ -38,11 +45,12 @@ $ python -m pytest ia_tests_propuesta.py -q -p no:cacheprovider --tb=line
 
 ```
 $ python -m pytest tests/test_ia_corregido.py -q -p no:cacheprovider --tb=line -rf
-tests/test_ia_corregido.py:55: AssertionError: assert 200 == 404
-tests/test_ia_corregido.py:95: AssertionError: assert 200 == 404
+E   AssertionError: assert 200 == 404
 FAILED tests/test_ia_corregido.py::test_consultar_poliza_inexistente_da_404
+FAILED tests/test_ia_corregido.py::test_actualizar_poliza_inexistente_da_404
+FAILED tests/test_ia_corregido.py::test_declarar_siniestro_en_poliza_inexistente_da_404_y_no_deja_huerfanos
 FAILED tests/test_ia_corregido.py::test_score_de_poliza_inexistente_da_404_y_no_registra
-2 failed, 16 passed, 1 warning in 2.36s
+4 failed, 31 passed, 1 warning in 2.68s
 ```
 
 - **Corrección**: cada aserción fija el resultado esperado (`== 404` con su `detail`, `== 201`, `== 422`, `== 409`), y los listados se comparan con el contenido exacto en vez de con «no falla» (`tests/test_ia_corregido.py`).
@@ -74,17 +82,17 @@ $ python -m pytest ia_tests_propuesta.py -q -p no:cacheprovider --tb=line
 
 ```
 $ python -m pytest tests/test_ia_corregido.py -q -p no:cacheprovider --tb=line -rf
-tests/test_ia_corregido.py:89: AssertionError: assert 0 == 1
-tests/test_ia_corregido.py:89: AssertionError: assert 0 == 1
+E   AssertionError: assert 0 == 2
 FAILED tests/test_ia_corregido.py::test_score_de_poliza_recien_creada_registra_la_prediccion[500000]
 FAILED tests/test_ia_corregido.py::test_score_de_poliza_recien_creada_registra_la_prediccion[4800000]
-2 failed, 16 passed, 1 warning in 2.43s
+FAILED tests/test_ia_corregido.py::test_cada_score_agrega_una_prediccion
+3 failed, 32 passed, 1 warning in 2.64s
 
-# la corregida (servicio sano) no escribe en real.db: las filas siguen en
-{'polizas': 7, 'siniestros': 0, 'predicciones': 1}
+# la corregida (servicio sano) sobre una real.db recién migrada: no escribe nada, sigue vacía
+{'polizas': 0, 'siniestros': 0, 'predicciones': 0}
 ```
 
-- **Corrección**: la fixture `cliente` (`tests/conftest.py`) sustituye exactamente `database.get_db` con una sesión sobre una base temporal cuyo esquema crea Alembic, y las pruebas comprueban el efecto: leen la póliza creada con `GET`, comparan `/resumen` con los números exactos y exigen que `/predicciones` contenga la predicción con el número de su póliza.
+- **Corrección**: la fixture `cliente` (`tests/conftest.py`) sustituye exactamente `database.get_db` con una sesión sobre una base temporal cuyo esquema crea Alembic, y las pruebas comprueban el efecto: leen siempre el efecto en una petición nueva (la póliza creada o actualizada con `GET`, los siniestros guardados), comparan `/resumen` con los números exactos y exigen que `/predicciones` contenga la predicción con el número de su póliza, con `alto_riesgo` coherente con el umbral configurado.
 
 ## Defecto 3
 
@@ -125,9 +133,9 @@ E   assert 404 == 200
 
 ```
 $ for i in 1 2 3; do python -m pytest tests/test_ia_corregido.py -q -p no:cacheprovider --tb=line | tail -1; done
-corrida 1: 4 failed, 14 passed, 1 warning in 2.33s
-corrida 2: 4 failed, 14 passed, 1 warning in 2.39s
-corrida 3: 4 failed, 14 passed, 1 warning in 2.40s
+corrida 1: 4 failed, 31 passed, 1 warning in 2.62s
+corrida 2: 4 failed, 31 passed, 1 warning in 2.63s
+corrida 3: 4 failed, 31 passed, 1 warning in 2.61s
 
 FAILED tests/test_ia_corregido.py::test_primas_validas_son_aceptadas_con_201[4000000.5]
 FAILED tests/test_ia_corregido.py::test_primas_validas_son_aceptadas_con_201[4800000]

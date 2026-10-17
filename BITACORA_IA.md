@@ -15,6 +15,9 @@
 | 6 | A | Edwing | Responder el mini-test sobre el 200 con mensaje de error («engaña a quien consume la API») y exigir que la respuesta estuviera bien soportada. |
 | 7 | Entrega | Edwing | Cómo crear en GitHub un espacio exclusivo para el taller; se adjuntó la guía HTML del taller. |
 | 8 | B, C, D | Edwing | Pedir seguir con el resto del taller de forma ejecutiva; la IA implementó el refactor, la medición de consultas, el dictamen y la imagen de Docker. |
+| 9 | Entrega | Edwing | Crear el repositorio vacío en GitHub con ayuda paso a paso (capturas de pantalla), autorizar subir la rama `entrega` como `main` con la etiqueta `v0-semilla`, y dejar `navareto@gmail.com` en `EQUIPO.md`. |
+| 10 | Entrega | Edwing | Preguntar cómo darle seguridad al repositorio sin que el profesor deje de verlo; se decidió dejarlo público hasta que el profesor confirme cómo lo lee el calificador. |
+| 11 | Revisión | Edwing | Pedir una revisión completa contra la rúbrica con estado y mejoras; la IA midió 21 mutantes sobre la batería corregida y la amplió (ver «Rechazado» 12). |
 
 ## Aceptado
 
@@ -27,6 +30,8 @@
 | 5 | Una estrategia de carga distinta por endpoint (`selectinload`, `lazy`, `joinedload`, `agregada`). | Se midió cada una con `contar_consultas.py --alternativas` antes de decidir. | Se corrigió un error de la propia medición (ver «Rechazado» 5). |
 | 6 | Dockerfile multietapa con usuario no root, `HEALTHCHECK` y `.dockerignore`. | Cumple B9 y se probó de verdad: `/health` desde el host, `docker restart` y contenedor nuevo. | Los datos viven en `/data` y se documentó qué pasa al recrear el contenedor. |
 | 7 | Tres mutaciones para la Parte D, aplicadas en una copia temporal del commit. | Cada una deja la propuesta de la IA en verde y la batería corregida en rojo. | Se repitió 20 veces la propuesta para demostrar que es intermitente. |
+| 8 | Subir una rama `entrega` (commit del semilla más los 15 commits propios) como `main` del repositorio. | `verificar_entrega.py` contaba como «persona extra» al autor del commit posterior del semilla; con la rama nueva pasa limpio. | La rama se armó con `cherry-pick` sobre una rama nueva y `main` local no se tocó (ver «Rechazado» 11). |
+| 9 | Dejar el repositorio público hasta que el profesor confirme cómo lo lee el calificador. | Un repositorio privado podría quedar ilegible para el calificador y todo pasaría a «no verificable». | Se sugirió preguntarle al profesor por Moodle si puede ser privado con acceso a su cuenta. |
 
 ## Rechazado
 
@@ -42,3 +47,5 @@
 | 8 | Restringir `tipo` a tres valores y exigir el formato `POL-AAAA-NNNNN` en `numero`. | El contrato visible usa números como `POL-CT-xxxxxx` y esas reglas los habrían rechazado. | Solo longitudes con `Field`, que es lo que exigen B6 y B7. |
 | 9 | Mantener `COPY . .` en el Dockerfile, como en el semilla. | Metería `app.db`, `.env` y las pruebas en la imagen. | `COPY` selectivo de los archivos del servicio y un `.dockerignore`. |
 | 10 | Mutación para el Defecto 2 que quitaba el `commit` al crear una póliza. | Dejaba en rojo algunas pruebas de la propuesta, así que no demostraba que fuera inofensiva. | Mutación en `/score`: deja de guardar la predicción, y la propuesta sigue completa en verde. |
+| 11 | Reescribir la historia local con `git rebase` para quitar el commit posterior del semilla. | El sistema de permisos lo bloqueó por destructivo, y además altera la historia: no se insistió ni se buscó una forma de saltarlo. | Se deshizo el rebase y se creó la rama nueva `entrega` con `cherry-pick`, dejando `main` intacto. |
+| 12 | Primera versión de `tests/test_ia_corregido.py`: 18 pruebas sobre 5 endpoints. | Una prueba de mutación con 21 defectos introducidos mostró que, ejecutada sola, detectaba 9 de 21 (no veía los 404 de `PUT` y de siniestros, ni los `commit` de `PUT` y siniestros, ni los validadores de fechas y monto, ni la fuga de `token_firma`). | 35 pruebas sobre los nueve endpoints y `/health`, siempre leyendo el efecto en una petición nueva: ahora detecta 20 de 21 (el restante es un mutante equivalente). |
