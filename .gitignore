@@ -1,1 +1,23 @@
-*.pyc
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secretos y configuración local (el ejemplo sí se versiona: .env.example)
+.env
+
+# Bases de datos locales y temporales de las pruebas
+*.db
+*.db-journal
+*.sqlite3
+
+# Editor y sistema
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
