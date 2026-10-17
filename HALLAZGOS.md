@@ -53,10 +53,59 @@
 > pólizas, y qué estrategia dejaron en el código. Si un resultado los sorprendió,
 > díganlo: eso se premia.
 
+**Cómo se midió.** `python contar_consultas.py` (Python 3.11.9, SQLite, 3 siniestros por póliza) escribe
+`CONSULTAS.csv` con la estrategia que quedó en `servicios.py`. Antes de decidir medí las cuatro con
+`python contar_consultas.py --alternativas`. El **conteo** es determinista; el **tiempo** no: el mismo
+código tarda distinto según la carga de la máquina en ese momento (las filas de `CONSULTAS.csv` y las de la
+corrida de alternativas no coinciden en milisegundos), así que solo comparo tiempos dentro de una misma corrida.
+
+**Modificaciones a `contar_consultas.py`** (se declaran porque se pide): (1) la columna `estrategia` sale de
+`ESTRATEGIA_ELEGIDA`, que refleja lo que hay en el código; (2) la opción `--alternativas` sustituye, solo en
+ese proceso, la consulta de cada endpoint por las otras estrategias y las mide, sin tocar el servicio ni
+escribir el CSV; (3) el tiempo es la mediana de 5 pasadas tras una de calentamiento, en vez de una sola.
+
+| Endpoint | `lazy` (10 → 2000) | `selectinload` | `joinedload` | `agregada` | Elegida |
+|---|---|---|---|---|---|
+| `/polizas` | 11 → 2001 | 2 → 5 | 1 → 1 | no aplica | `selectinload` |
+| `/polizas/{id}` | 2 → 2 | 2 → 2 | 1 → 1 | no aplica | `lazy` |
+| `/siniestros` | 11 → 2001 | 2 → 5 | 1 → 1 | no aplica | `joinedload` |
+| `/resumen` | 11 → 2001 | 2 → 5 | 1 → 1 | 1 → 1 | `agregada` |
+
 ## `/polizas`
+
+Con `selectinload` el endpoint emite **2 consultas con 10 pólizas y 5 con 2000**. Una trae las pólizas y las
+demás traen los siniestros de todas ellas con un `IN (...)`. Lo que me sorprendió es que no se quedó en 2:
+SQLAlchemy parte la lista de identificadores en lotes de 500, así que con 2000 pólizas son 1 + 4 = 5; el
+conteo crece con N/500, no con N. La alternativa por defecto, `lazy`, da **11 y 2001** (1 + N): cada póliza
+dispara una consulta propia para sus siniestros en el momento de serializarla, el N+1 clásico (H12). `joinedload`
+baja a 1 consulta en los dos tamaños, pero el JOIN repite los datos de la póliza en cada una de las 6000 filas
+de siniestros; en la corrida de alternativas con 2000 pólizas tardó 435 ms contra 380 ms de `selectinload`, es
+decir, tener una consulta en lugar de cinco no fue más rápido. Dejé `selectinload`.
 
 ## `/polizas/{id}`
 
+Con `lazy` son **2 consultas con 10 pólizas y 2 con 2000**: una busca la póliza por su clave y la otra carga sus
+siniestros cuando se serializan. El número no cambia porque pedir una sola póliza nunca puede producir un N+1:
+no depende de cuántas pólizas haya en la tabla. `selectinload` cuesta exactamente lo mismo (2 y 2), y `joinedload`
+ahorra una consulta (1 y 1) a cambio de repetir la fila de la póliza por cada siniestro; la diferencia de tiempo
+(5,5 ms con `lazy`, 6,8 ms con `selectinload` y 4,8 ms con `joinedload` en la corrida de alternativas) queda dentro del ruido. Es el caso donde cargar todo de una vez no mejora nada,
+así que dejé la carga perezosa, que es el valor por defecto, y no añadí código para algo que la medición dice que da igual.
+
 ## `/siniestros`
 
+Con `joinedload` son **1 consulta con 10 pólizas y 1 con 2000**. Aquí el JOIN es seguro porque la relación
+va de muchos a uno: cada siniestro tiene una sola póliza, así que el JOIN no multiplica filas. Con `lazy` serían
+**11 y 2001**; el 2001 sale de 1 + 2000 *pólizas distintas* (los 6000 siniestros comparten 2000 pólizas y el mapa de
+identidad de la sesión no repite la consulta de una póliza ya cargada), o sea que N cuenta pólizas y no siniestros.
+`selectinload` da 2 y 5, otra vez por los lotes de 500. En la corrida de alternativas con 2000 pólizas `joinedload`
+tardó unos 613 ms, `selectinload` unos 1125 ms y `lazy` unos 1687 ms: ganó en consultas y en tiempo.
+
 ## `/resumen`
+
+Con `agregada` son **1 consulta con 10 pólizas y 1 con 2000**: la base de datos cuenta y suma con
+`COUNT`/`SUM` sobre un `LEFT JOIN ... GROUP BY` y devuelve una fila por póliza, sin traer ningún siniestro a Python.
+Aquí seguir la regla «cargar todo de una vez es más eficiente» da **peor rendimiento**: `joinedload` también cuesta 1
+consulta y `selectinload` 5, pero los dos hidratan 6000 objetos `Siniestro` solo para sumarlos en Python (en la
+corrida de alternativas: unos 489 ms y 379 ms contra unos 40 ms de la agregada, cerca de 10 veces), y su costo crece con
+el número de siniestros y no con el de pólizas. `lazy` repite el patrón 1 + N (11 y 2001). Por eso el número de consultas
+no basta para decidir: `joinedload` y `agregada` empatan en 1 y aun así no hacen el mismo trabajo.
