@@ -1,135 +1,101 @@
 """
-polizas-api-v0 — Gestión de pólizas y siniestros.
-Aseguradora Santo Tomás · prototipo interno.
+polizas-api — Gestión de pólizas y siniestros.
+Aseguradora Santo Tomás.
+
+Las rutas solo traducen HTTP: validan la entrada, llaman a `servicios` y declaran
+el esquema de salida. La lógica y el acceso a datos viven en `servicios.py`.
 """
-import hashlib
-import pickle
-from datetime import date
+from typing import Annotated, Any
 
-from fastapi import FastAPI
-from sqlalchemy import select
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
-import config
-from database import Base, engine, sesion
-from esquemas import PolizaActualizacion, PolizaEntrada, PuntuacionEntrada, SiniestroEntrada
-from modelos import Poliza, Prediccion, Siniestro
+import servicios
+from config import Settings, get_settings
+from database import get_db
+from esquemas import (
+    PolizaActualizacion, PolizaEntrada, PolizaSalida, PrediccionSalida, PuntuacionEntrada,
+    PuntuacionSalida, ResumenSalida, SaludSalida, SiniestroConPoliza, SiniestroEntrada, SiniestroSalida,
+)
 
-Base.metadata.create_all(engine)
+app = FastAPI(title="Pólizas API", version="0.2.0")
 
-with open(config.RUTA_MODELO, "rb") as fh:
-    modelo = pickle.load(fh)
-
-app = FastAPI(title="Pólizas API", version="0.1.0")
-
-
-def firmar(numero: str) -> str:
-    return hashlib.sha256(f"{numero}:{config.SECRETO_FIRMA}".encode()).hexdigest()
+Db = Annotated[Session, Depends(get_db)]
+Config = Annotated[Settings, Depends(get_settings)]
 
 
-def _siniestro(s: Siniestro) -> dict:
-    return {"id": s.id, "poliza_id": s.poliza_id, "numero_poliza": s.poliza.numero,
-            "fecha": s.fecha, "monto": s.monto, "descripcion": s.descripcion, "estado": s.estado}
+def _responder(codigo: int):
+    async def manejador(_peticion: Request, exc: Exception) -> JSONResponse:
+        return JSONResponse(status_code=codigo, content={"detail": str(exc)})
+
+    return manejador
 
 
-def _poliza(p: Poliza) -> dict:
-    return {
-        "id": p.id, "numero": p.numero, "asegurado": p.asegurado, "tipo": p.tipo,
-        "prima": p.prima, "fecha_inicio": p.fecha_inicio, "fecha_fin": p.fecha_fin,
-        "token_firma": p.token_firma,
-        "siniestros": [{"id": s.id, "fecha": s.fecha, "monto": s.monto,
-                        "descripcion": s.descripcion, "estado": s.estado} for s in p.siniestros],
-    }
+app.add_exception_handler(servicios.PolizaNoExiste, _responder(status.HTTP_404_NOT_FOUND))
+app.add_exception_handler(servicios.NumeroDuplicado, _responder(status.HTTP_409_CONFLICT))
+app.add_exception_handler(servicios.FechasIncoherentes, _responder(422))
 
 
-@app.post("/polizas")
-def crear_poliza(datos: PolizaEntrada):
-    poliza = Poliza(numero=datos.numero, asegurado=datos.asegurado, tipo=datos.tipo,
-                    prima=datos.prima, fecha_inicio=datos.fecha_inicio, fecha_fin=datos.fecha_fin,
-                    token_firma=firmar(datos.numero))
-    for s in datos.siniestros:
-        poliza.siniestros.append(Siniestro(
-            fecha=date.fromisoformat(str(s.get("fecha", date.today()))),
-            monto=s.get("monto", 0), descripcion=s.get("descripcion", ""),
-            estado=s.get("estado", "abierto")))
-    sesion.add(poliza)
-    sesion.commit()
-    sesion.refresh(poliza)
-    return poliza
+@app.get("/health", response_model=SaludSalida)
+def health(db: Db) -> Any:
+    try:
+        db.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "la base de datos no responde") from exc
+    return SaludSalida(status="ok", database="ok")
 
 
-@app.get("/polizas")
-def listar_polizas():
-    return [_poliza(p) for p in sesion.scalars(select(Poliza).order_by(Poliza.id))]
+@app.post("/polizas", response_model=PolizaSalida, status_code=status.HTTP_201_CREATED)
+def crear_poliza(datos: PolizaEntrada, db: Db, config: Config) -> Any:
+    return servicios.crear_poliza(db, datos, config.secreto_firma.get_secret_value())
 
 
-@app.get("/polizas/{id_poliza}")
-def obtener_poliza(id_poliza: int):
-    poliza = sesion.get(Poliza, id_poliza)
-    if poliza is None:
-        return {"error": f"no existe la póliza {id_poliza}"}
-    return _poliza(poliza)
+@app.get("/polizas", response_model=list[PolizaSalida])
+def listar_polizas(db: Db) -> Any:
+    return servicios.listar_polizas(db)
 
 
-@app.put("/polizas/{id_poliza}")
-def actualizar_poliza(id_poliza: int, datos: PolizaActualizacion):
-    poliza = sesion.get(Poliza, id_poliza)
-    if poliza is None:
-        return {"error": f"no existe la póliza {id_poliza}"}
-    for campo, valor in datos.model_dump().items():
-        setattr(poliza, campo, valor)
-    sesion.commit()
-    sesion.refresh(poliza)
-    return _poliza(poliza)
+@app.get("/polizas/{id_poliza}", response_model=PolizaSalida)
+def obtener_poliza(id_poliza: int, db: Db) -> Any:
+    return servicios.obtener_poliza(db, id_poliza)
 
 
-@app.post("/polizas/{id_poliza}/siniestros")
-def declarar_siniestro(id_poliza: int, datos: SiniestroEntrada):
-    siniestro = Siniestro(poliza_id=id_poliza, fecha=datos.fecha, monto=datos.monto,
-                          descripcion=datos.descripcion, estado=datos.estado)
-    sesion.add(siniestro)
-    sesion.commit()
-    sesion.refresh(siniestro)
-    return {"id": siniestro.id, "poliza_id": siniestro.poliza_id, "fecha": siniestro.fecha,
-            "monto": siniestro.monto, "descripcion": siniestro.descripcion, "estado": siniestro.estado}
+@app.put("/polizas/{id_poliza}", response_model=PolizaSalida)
+def actualizar_poliza(id_poliza: int, datos: PolizaActualizacion, db: Db) -> Any:
+    cambios = datos.model_dump(exclude_unset=True, exclude_none=True)
+    return servicios.actualizar_poliza(db, id_poliza, cambios)
 
 
-@app.get("/siniestros")
-def listar_siniestros():
-    return [_siniestro(s) for s in sesion.scalars(select(Siniestro).order_by(Siniestro.id))]
+@app.post("/polizas/{id_poliza}/siniestros", response_model=SiniestroSalida, status_code=status.HTTP_201_CREATED)
+def declarar_siniestro(id_poliza: int, datos: SiniestroEntrada, db: Db) -> Any:
+    return servicios.declarar_siniestro(db, id_poliza, datos)
 
 
-@app.get("/resumen")
-def resumen():
-    filas = []
-    for p in sesion.scalars(select(Poliza).order_by(Poliza.id)):
-        filas.append({"numero": p.numero, "n_siniestros": len(p.siniestros),
-                      "monto_total": round(sum(s.monto for s in p.siniestros), 2)})
-    return filas
+@app.get("/siniestros", response_model=list[SiniestroConPoliza])
+def listar_siniestros(db: Db) -> Any:
+    return servicios.listar_siniestros(db)
 
 
-@app.post("/score")
-def puntuar(datos: PuntuacionEntrada):
-    poliza = sesion.scalar(select(Poliza).where(Poliza.numero == datos.numero))
-    if poliza is None:
-        return {"error": f"no existe la póliza {datos.numero}"}
-    rasgos = [[poliza.prima, len(poliza.siniestros), sum(s.monto for s in poliza.siniestros),
-               (date.today() - poliza.fecha_inicio).days]]
-    puntaje = float(modelo.predict_proba(rasgos)[0][1])
-    prediccion = Prediccion(poliza_id=poliza.id, puntaje=puntaje,
-                            alto_riesgo=puntaje > config.UMBRAL_ALTO_RIESGO)
-    sesion.add(prediccion)
-    sesion.commit()
-    return {"numero": poliza.numero, "puntaje": round(puntaje, 4),
-            "alto_riesgo": prediccion.alto_riesgo}
+@app.get("/resumen", response_model=list[ResumenSalida])
+def resumen(db: Db) -> Any:
+    return servicios.resumen(db)
 
 
-@app.get("/predicciones")
-def listar_predicciones():
-    return [{"id": pr.id, "poliza_id": pr.poliza_id, "puntaje": pr.puntaje,
-             "alto_riesgo": pr.alto_riesgo, "creado_en": pr.creado_en}
-            for pr in sesion.scalars(select(Prediccion).order_by(Prediccion.id))]
+@app.post("/score", response_model=PuntuacionSalida)
+def puntuar(datos: PuntuacionEntrada, db: Db, config: Config, modelo: Annotated[Any, Depends(servicios.get_modelo)]) -> Any:
+    numero, puntaje, alto_riesgo = servicios.puntuar(db, modelo, datos.numero, config.umbral_alto_riesgo)
+    return PuntuacionSalida(numero=numero, puntaje=puntaje, alto_riesgo=alto_riesgo)
+
+
+@app.get("/predicciones", response_model=list[PrediccionSalida])
+def listar_predicciones(db: Db) -> Any:
+    return servicios.listar_predicciones(db)
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
+    uvicorn.run("main:app", host="127.0.0.1", port=8000)
