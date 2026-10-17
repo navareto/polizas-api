@@ -10,4 +10,4 @@
 
 | Nombre completo | Correo institucional | Identidades git |
 |-----------------|----------------------|-----------------|
-| Edwing Navarrete | por completar@usta.edu.co | navareto <navareto@gmail.com> |
+| Edwing Navarrete | navareto@gmail.com (correo personal; no se declaró el institucional) | navareto <navareto@gmail.com> |
